@@ -246,7 +246,10 @@ jobs:
 
           echo ""
 
-          curl -L --fail --max-time 30 \
+          # إضافة User-Agent لتجاوز حظر Cloudflare للطلبات الآلية
+          curl -sSL \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            --max-time 30 \
             "$CLOUDFLARE_URL/api/tags"
 
           echo ""
