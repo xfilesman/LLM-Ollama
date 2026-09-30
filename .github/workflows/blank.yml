@@ -1,0 +1,346 @@
+name: Ubuntu + Ollama + Cloudflare
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ubuntu-server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+
+    steps:
+      # ==========================================
+      # 1. SYSTEM INFORMATION
+      # ==========================================
+      - name: System Information
+        run: |
+          echo "=========================================="
+          echo "           UBUNTU SERVER"
+          echo "=========================================="
+
+          echo ""
+          echo "=== OS ==="
+          cat /etc/os-release
+
+          echo ""
+          echo "=== CPU ==="
+          nproc
+          lscpu | grep -E 'Model name|CPU\(s\)' || true
+
+          echo ""
+          echo "=== RAM ==="
+          free -h
+
+          echo ""
+          echo "=== DISK ==="
+          df -h /
+
+          echo ""
+          echo "=== GPU ==="
+          lspci | grep -i -E "vga|3d|nvidia" || true
+
+      # ==========================================
+      # 2. INSTALL PACKAGES
+      # ==========================================
+      - name: Install Required Packages
+        run: |
+          sudo apt-get update
+
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            curl \
+            wget \
+            git \
+            nano \
+            vim \
+            htop \
+            net-tools \
+            iproute2 \
+            lsof \
+            ca-certificates \
+            unzip
+
+      # ==========================================
+      # 3. INSTALL OLLAMA
+      # ==========================================
+      - name: Install Ollama
+        run: |
+          echo "=========================================="
+          echo "          INSTALLING OLLAMA"
+          echo "=========================================="
+
+          curl -fsSL https://ollama.com/install.sh | sh
+
+          ollama --version
+
+      # ==========================================
+      # 4. START OLLAMA
+      # ==========================================
+      - name: Start Ollama
+        run: |
+          echo "Starting Ollama..."
+
+          nohup ollama serve > /tmp/ollama.log 2>&1 &
+
+          sleep 10
+
+          echo ""
+          echo "=== Ollama API ==="
+
+          curl -s http://127.0.0.1:11434/api/tags || true
+
+      # ==========================================
+      # 5. DOWNLOAD QWEN
+      # ==========================================
+      - name: Install Qwen 2.5 Coder 7B
+        run: |
+          echo "=========================================="
+          echo "       DOWNLOADING QWEN 2.5 CODER 7B"
+          echo "=========================================="
+
+          ollama pull qwen2.5-coder:7b
+
+          echo ""
+          echo "=== MODELS ==="
+
+          ollama list
+
+      # ==========================================
+      # 6. TEST OLLAMA
+      # ==========================================
+      - name: Test Ollama
+        run: |
+          echo "=========================================="
+          echo "              OLLAMA TEST"
+          echo "=========================================="
+
+          curl -s http://127.0.0.1:11434/api/tags
+
+          echo ""
+          echo ""
+
+          ollama run qwen2.5-coder:7b \
+            "Write a simple Python Hello World program."
+
+      # ==========================================
+      # 7. INSTALL CLOUDFLARED
+      # ==========================================
+      - name: Install Cloudflared
+        run: |
+          echo "=========================================="
+          echo "          INSTALLING CLOUDFLARED"
+          echo "=========================================="
+
+          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+            | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflared.list
+
+          sudo apt-get update
+
+          sudo apt-get install -y cloudflared
+
+          echo ""
+          echo "=== Cloudflared Version ==="
+
+          cloudflared --version
+
+      # ==========================================
+      # 8. START CLOUDFLARE QUICK TUNNEL
+      # ==========================================
+      - name: Start Cloudflare Tunnel
+        run: |
+          echo "=========================================="
+          echo "       STARTING CLOUDFLARE TUNNEL"
+          echo "=========================================="
+
+          echo ""
+          echo "Ollama is listening on:"
+          echo "http://127.0.0.1:11434"
+
+          echo ""
+          echo "Starting Cloudflare Quick Tunnel..."
+          echo ""
+
+          nohup cloudflared tunnel \
+            --url http://127.0.0.1:11434 \
+            > /tmp/cloudflared.log 2>&1 &
+
+          CLOUDFLARED_PID=$!
+
+          echo "Cloudflared PID: $CLOUDFLARED_PID"
+
+          echo ""
+          echo "Waiting for Cloudflare Tunnel URL..."
+
+          TUNNEL_URL=""
+
+          for i in {1..60}; do
+            sleep 2
+
+            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' \
+              /tmp/cloudflared.log \
+              | head -1 || true)
+
+            if [ -n "$TUNNEL_URL" ]; then
+              break
+            fi
+
+            echo "Waiting... $i/60"
+
+            if ! kill -0 "$CLOUDFLARED_PID" 2>/dev/null; then
+              echo ""
+              echo "ERROR: cloudflared process stopped."
+
+              echo ""
+              echo "=== Cloudflared Log ==="
+              cat /tmp/cloudflared.log
+
+              exit 1
+            fi
+          done
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo ""
+            echo "ERROR: Cloudflare Tunnel URL was not found."
+
+            echo ""
+            echo "=== Cloudflared Log ==="
+            cat /tmp/cloudflared.log
+
+            exit 1
+          fi
+
+          echo "CLOUDFLARE_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "=========================================="
+          echo "       CLOUDFLARE TUNNEL READY"
+          echo "=========================================="
+
+          echo ""
+          echo "Ollama URL:"
+          echo "$TUNNEL_URL"
+
+          echo ""
+          echo "Ollama API:"
+          echo "$TUNNEL_URL/api/tags"
+
+          echo ""
+          echo "=========================================="
+
+      # ==========================================
+      # 9. TEST CLOUDFLARE → OLLAMA
+      # ==========================================
+      - name: Test Cloudflare Tunnel
+        run: |
+          echo "=========================================="
+          echo "       TESTING CLOUDFLARE → OLLAMA"
+          echo "=========================================="
+
+          sleep 5
+
+          echo ""
+          echo "Testing:"
+          echo "$CLOUDFLARE_URL/api/tags"
+
+          echo ""
+
+          curl -L --fail --max-time 30 \
+            "$CLOUDFLARE_URL/api/tags"
+
+          echo ""
+          echo ""
+          echo "=========================================="
+          echo " Cloudflare → Ollama connection WORKS"
+          echo "=========================================="
+
+      # ==========================================
+      # 10. FINAL INFORMATION
+      # ==========================================
+      - name: Server Ready
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "          UBUNTU SERVER READY"
+          echo "=========================================="
+
+          echo ""
+          echo "CPU:"
+          echo "nproc"
+
+          echo ""
+          echo "RAM:"
+          free -h
+
+          echo ""
+          echo "DISK:"
+          df -h /
+
+          echo ""
+          echo "OLLAMA:"
+          ollama --version
+
+          echo ""
+          echo "MODELS:"
+          ollama list
+
+          echo ""
+          echo "=========================================="
+          echo "       CLOUDFLARE OLLAMA URL"
+          echo "=========================================="
+
+          echo ""
+          echo "$CLOUDFLARE_URL"
+
+          echo ""
+          echo "API:"
+          echo "$CLOUDFLARE_URL/api/tags"
+
+          echo ""
+          echo "=========================================="
+
+      # ==========================================
+      # 11. KEEP RUNNER ALIVE
+      # ==========================================
+      - name: Keep Server Alive
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "       UBUNTU SERVER IS RUNNING"
+          echo "=========================================="
+
+          echo ""
+          echo "Ollama:"
+          echo "http://127.0.0.1:11434"
+
+          echo ""
+          echo "Cloudflare:"
+          echo "$CLOUDFLARE_URL"
+
+          echo ""
+          echo "API:"
+          echo "$CLOUDFLARE_URL/api/tags"
+
+          echo ""
+
+          while true; do
+            echo "=========================================="
+            echo "[$(date)] Server Alive"
+            echo "=========================================="
+
+            echo ""
+            echo "RAM:"
+            free -h
+
+            echo ""
+            echo "Ollama Models:"
+            ollama list
+
+            echo ""
+            echo "Cloudflare Tunnel:"
+            ps aux | grep cloudflared | grep -v grep || true
+
+            echo ""
+            sleep 300
+          done
