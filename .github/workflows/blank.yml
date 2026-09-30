@@ -1,4 +1,4 @@
-name: Ubuntu + Ollama + Cloudflare
+name: Ubuntu + Ollama + LocalTunnel
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
       - name: System Information
         run: |
           echo "=========================================="
-          echo "           UBUNTU SERVER"
+          echo "            UBUNTU SERVER"
           echo "=========================================="
 
           echo ""
@@ -57,7 +57,9 @@ jobs:
             iproute2 \
             lsof \
             ca-certificates \
-            unzip
+            unzip \
+            nodejs \
+            npm
 
       # ==========================================
       # 3. INSTALL OLLAMA
@@ -122,36 +124,28 @@ jobs:
             "Write a simple Python Hello World program."
 
       # ==========================================
-      # 7. INSTALL CLOUDFLARED
+      # 7. INSTALL LOCALTUNNEL
       # ==========================================
-      - name: Install Cloudflared
+      - name: Install LocalTunnel
         run: |
           echo "=========================================="
-          echo "          INSTALLING CLOUDFLARED"
+          echo "          INSTALLING LOCALTUNNEL"
           echo "=========================================="
 
-          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-            | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
-            | sudo tee /etc/apt/sources.list.d/cloudflared.list
-
-          sudo apt-get update
-
-          sudo apt-get install -y cloudflared
+          sudo npm install -g localtunnel
 
           echo ""
-          echo "=== Cloudflared Version ==="
+          echo "=== LocalTunnel Version ==="
 
-          cloudflared --version
+          lt --version
 
       # ==========================================
-      # 8. START CLOUDFLARE QUICK TUNNEL
+      # 8. START LOCALTUNNEL TUNNEL
       # ==========================================
-      - name: Start Cloudflare Tunnel
+      - name: Start LocalTunnel
         run: |
           echo "=========================================="
-          echo "       STARTING CLOUDFLARE TUNNEL"
+          echo "          STARTING LOCALTUNNEL"
           echo "=========================================="
 
           echo ""
@@ -159,28 +153,24 @@ jobs:
           echo "http://127.0.0.1:11434"
 
           echo ""
-          echo "Starting Cloudflare Quick Tunnel..."
+          echo "Starting LocalTunnel..."
           echo ""
 
-          nohup cloudflared tunnel \
-            --url http://127.0.0.1:11434 \
-            > /tmp/cloudflared.log 2>&1 &
+          nohup npx localtunnel --port 11434 > /tmp/localtunnel.log 2>&1 &
 
-          CLOUDFLARED_PID=$!
+          LOCALTUNNEL_PID=$!
 
-          echo "Cloudflared PID: $CLOUDFLARED_PID"
+          echo "LocalTunnel PID: $LOCALTUNNEL_PID"
 
           echo ""
-          echo "Waiting for Cloudflare Tunnel URL..."
+          echo "Waiting for LocalTunnel URL..."
 
           TUNNEL_URL=""
 
           for i in {1..60}; do
             sleep 2
 
-            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' \
-              /tmp/cloudflared.log \
-              | head -1 || true)
+            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.loca\.lt' /tmp/localtunnel.log | head -1 || true)
 
             if [ -n "$TUNNEL_URL" ]; then
               break
@@ -188,13 +178,13 @@ jobs:
 
             echo "Waiting... $i/60"
 
-            if ! kill -0 "$CLOUDFLARED_PID" 2>/dev/null; then
+            if ! kill -0 "$LOCALTUNNEL_PID" 2>/dev/null; then
               echo ""
-              echo "ERROR: cloudflared process stopped."
+              echo "ERROR: localtunnel process stopped."
 
               echo ""
-              echo "=== Cloudflared Log ==="
-              cat /tmp/cloudflared.log
+              echo "=== LocalTunnel Log ==="
+              cat /tmp/localtunnel.log
 
               exit 1
             fi
@@ -202,20 +192,20 @@ jobs:
 
           if [ -z "$TUNNEL_URL" ]; then
             echo ""
-            echo "ERROR: Cloudflare Tunnel URL was not found."
+            echo "ERROR: LocalTunnel URL was not found."
 
             echo ""
-            echo "=== Cloudflared Log ==="
-            cat /tmp/cloudflared.log
+            echo "=== LocalTunnel Log ==="
+            cat /tmp/localtunnel.log
 
             exit 1
           fi
 
-          echo "CLOUDFLARE_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
+          echo "TUNNEL_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
 
           echo ""
           echo "=========================================="
-          echo "       CLOUDFLARE TUNNEL READY"
+          echo "         LOCALTUNNEL READY"
           echo "=========================================="
 
           echo ""
@@ -230,32 +220,31 @@ jobs:
           echo "=========================================="
 
       # ==========================================
-      # 9. TEST CLOUDFLARE → OLLAMA
+      # 9. TEST LOCALTUNNEL → OLLAMA
       # ==========================================
-      - name: Test Cloudflare Tunnel
+      - name: Test LocalTunnel
         run: |
           echo "=========================================="
-          echo "       TESTING CLOUDFLARE → OLLAMA"
+          echo "       TESTING LOCALTUNNEL → OLLAMA"
           echo "=========================================="
 
           sleep 5
 
           echo ""
           echo "Testing:"
-          echo "$CLOUDFLARE_URL/api/tags"
+          echo "$TUNNEL_URL/api/tags"
 
           echo ""
 
-          # إضافة User-Agent لتجاوز حظر Cloudflare للطلبات الآلية
           curl -sSL \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "bypass-tunnel-reminder: true" \
             --max-time 30 \
-            "$CLOUDFLARE_URL/api/tags"
+            "$TUNNEL_URL/api/tags"
 
           echo ""
           echo ""
           echo "=========================================="
-          echo " Cloudflare → Ollama connection WORKS"
+          echo " LocalTunnel → Ollama connection WORKS"
           echo "=========================================="
 
       # ==========================================
@@ -265,12 +254,12 @@ jobs:
         run: |
           echo ""
           echo "=========================================="
-          echo "          UBUNTU SERVER READY"
+          echo "         UBUNTU SERVER READY"
           echo "=========================================="
 
           echo ""
           echo "CPU:"
-          echo "nproc"
+          nproc
 
           echo ""
           echo "RAM:"
@@ -290,15 +279,15 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "       CLOUDFLARE OLLAMA URL"
+          echo "         LOCALTUNNEL OLLAMA URL"
           echo "=========================================="
 
           echo ""
-          echo "$CLOUDFLARE_URL"
+          echo "$TUNNEL_URL"
 
           echo ""
           echo "API:"
-          echo "$CLOUDFLARE_URL/api/tags"
+          echo "$TUNNEL_URL/api/tags"
 
           echo ""
           echo "=========================================="
@@ -318,12 +307,12 @@ jobs:
           echo "http://127.0.0.1:11434"
 
           echo ""
-          echo "Cloudflare:"
-          echo "$CLOUDFLARE_URL"
+          echo "LocalTunnel:"
+          echo "$TUNNEL_URL"
 
           echo ""
           echo "API:"
-          echo "$CLOUDFLARE_URL/api/tags"
+          echo "$TUNNEL_URL/api/tags"
 
           echo ""
 
@@ -341,8 +330,8 @@ jobs:
             ollama list
 
             echo ""
-            echo "Cloudflare Tunnel:"
-            ps aux | grep cloudflared | grep -v grep || true
+            echo "LocalTunnel Process:"
+            ps aux | grep localtunnel | grep -v grep || true
 
             echo ""
             sleep 300
